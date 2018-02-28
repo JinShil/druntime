@@ -13,7 +13,7 @@ module object;
 private
 {
     extern (C) Object _d_newclass(const TypeInfo_Class ci);
-    extern (C) void rt_finalize(void *data, bool det=true);
+    extern (C) void rt_finalize2(void* p, bool det = true, bool resetMemory = true) nothrow;
 }
 
 public @trusted @nogc nothrow pure extern (C) void _d_delThrowable(scope Throwable);
@@ -2923,14 +2923,13 @@ unittest
 }
 
 /********
-Destroys the given object and sets it back to its initial state. It's used to
-_destroy an object, calling its destructor or finalizer so it no longer
-references any other objects. It does $(I not) initiate a GC cycle or free
-any GC memory.
+Destroys the given object, calling its destructor or finalizer. It does not re-initialize
+the object, nor does it initiate a GC cycle or free any GC memory.  `destroy` is a no-op
+for types without a destructor.
 */
 void destroy(T)(T obj) if (is(T == class))
 {
-    rt_finalize(cast(void*)obj);
+    rt_finalize2(cast(void*)obj, true, false);
 }
 
 /// ditto
@@ -2939,7 +2938,7 @@ void destroy(T)(T obj) if (is(T == interface))
     destroy(cast(Object)obj);
 }
 
-/// Reference type demonstration
+/// Demonstration destroying a class.
 unittest
 {
     class C
@@ -2957,18 +2956,7 @@ unittest
     assert(c.s == "T");       // `c.s` is `"T"`
     destroy(c);
     assert(c.dtorCount == 1); // `c`'s destructor was called
-    assert(c.s == "S");       // `c.s` is back to its inital state, `"S"`
-}
-
-/// Value type demonstration
-unittest
-{
-    int i;
-    assert(i == 0);           // `i`'s initial state is `0`
-    i = 1;
-    assert(i == 1);           // `i` changed to `1`
-    destroy(i);
-    assert(i == 0);           // `i` is back to its initial state `0`
+    assert(c.s == "T");       // `c.s` is still `"T"`
 }
 
 unittest
@@ -2979,11 +2967,11 @@ unittest
        auto a = new A, b = new A;
        a.s = b.s = "asd";
        destroy(a);
-       assert(a.s == "A");
+       assert(a.s == "asd");
 
        I i = b;
        destroy(i);
-       assert(b.s == "A");
+       assert(b.s == "asd");
    }
    {
        static bool destroyed = false;
@@ -3000,13 +2988,13 @@ unittest
        a.s = b.s = "asd";
        destroy(a);
        assert(destroyed);
-       assert(a.s == "B");
+       assert(a.s == "asd");
 
        destroyed = false;
        I i = b;
        destroy(i);
        assert(destroyed);
-       assert(b.s == "B");
+       assert(b.s == "asd");
    }
    // this test is invalid now that the default ctor is not run after clearing
    version(none)
@@ -3022,7 +3010,7 @@ unittest
        auto a = new C;
        a.s = "asd";
        destroy(a);
-       assert(a.s == "C");
+       assert(a.s == "asd");
    }
 }
 
@@ -3030,14 +3018,6 @@ unittest
 void destroy(T)(ref T obj) if (is(T == struct))
 {
     _destructRecurse(obj);
-    () @trusted {
-        auto buf = (cast(ubyte*) &obj)[0 .. T.sizeof];
-        auto init = cast(ubyte[])typeid(T).initializer();
-        if (init.ptr is null) // null ptr means initialize to 0s
-            buf[] = 0;
-        else
-            buf[] = init[];
-    } ();
 }
 
 nothrow @safe @nogc unittest
@@ -3047,7 +3027,7 @@ nothrow @safe @nogc unittest
        A a;
        a.s = "asd";
        destroy(a);
-       assert(a.s == "A");
+       assert(a.s == "asd");
    }
    {
        static int destroyed = 0;
@@ -3074,9 +3054,18 @@ nothrow @safe @nogc unittest
        a.c.s = "jkl";
        destroy(a);
        assert(destroyed == 2);
-       assert(a.s == "B");
-       assert(a.c.s == "C" );
+       assert(a.s == "asd");
+       assert(a.c.s == "jkl" );
    }
+}
+
+// This should only be used internally for recursive destruction.  Users should not
+// be directly destroying objects that have no destructor, even if it would ultimately
+// do nothing.
+private void destroy(X)(ref X obj)
+    if (!is(X == struct) && !is(X == interface) && !is(X == class) && !_isStaticArray!X)
+{
+    // no-op for types that do not have destructors, which includes unions
 }
 
 /// ditto
@@ -3092,7 +3081,7 @@ unittest
     a[0] = 1;
     a[1] = 2;
     destroy(a);
-    assert(a == [ 0, 0 ]);
+    assert(a == [ 1, 2 ]);
 }
 
 unittest
@@ -3143,13 +3132,6 @@ unittest
     }
 }
 
-/// ditto
-void destroy(T)(ref T obj)
-    if (!is(T == struct) && !is(T == interface) && !is(T == class) && !_isStaticArray!T)
-{
-    obj = T.init;
-}
-
 template _isStaticArray(T : U[N], U, size_t N)
 {
     enum bool _isStaticArray = true;
@@ -3165,12 +3147,12 @@ unittest
    {
        int a = 42;
        destroy(a);
-       assert(a == 0);
+       assert(a == 42);
    }
    {
        float a = 42;
        destroy(a);
-       assert(isnan(a));
+       assert(a == 42);
    }
 }
 
