@@ -4547,3 +4547,116 @@ void __ArrayDtor(T)(T[] a)
     foreach_reverse (ref T e; a)
         e.__xdtor();
 }
+
+private extern (C) void[] _d_arraysetlengthT(const TypeInfo ti, size_t newlength, void* p) @safe pure nothrow;
+private extern (C) void[] _d_arraysetlengthiT(const TypeInfo ti, size_t newlength, void* p) @safe pure nothrow;
+private bool isZeroInitialized(T : E[], E)()
+{
+    return true;
+}
+
+private bool isZeroInitialized(T)()
+{
+    static if(is(T == class) || is(T == interface))
+    {
+     	return true;
+    }
+    else static if (is(T == struct))
+    {
+        foreach(t; T.init.tupleof)
+        {
+            if (!isZeroInitialized!(typeof(t))())
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+    else
+    {
+        return T.init == cast(T)0;
+    }
+}
+
+/**
+  Sets the length of an array.
+
+  This template function is needed by the compiler, and is not intended to be used directly.
+
+  Params:
+    a = The array to set the length for
+    newLength = The new length to apply to `a`
+*/
+void __setArrayLength(T)(ref T[] a, size_t newLength) @safe pure nothrow
+{
+    /* Work in progress:
+    This template's implementation is not finished.  For now, it simply forwards to the
+    runtime hooks that existing prior to this templates introduction to ensure existing behavior
+    is maintained.  It should be optmizied to take advantage of the compile-time information and avoid
+    employing runtime type information (i.e. `TypeInfo`).  When the implementation is completed,
+    `_d_arraysetlengthT` and `_d_arraysetlengthiT` can be permanently removed.
+
+    The delcarations in this file for `_d_arraysetlengthT` and `_d_arraysetlengthiT` have been
+    attributed with `@safe pure nothrow`.  This is a fat lie, but one that is currently being
+    told by the compiler, so we must maintain the lie until the implementation of `__setArrayLength`
+    can be made truly `@safe pure nothrow`.
+    */
+
+    static if (isZeroInitialized!T)
+    {
+        _d_arraysetlengthT(typeid(T[]), newLength, &a);
+    }
+    else
+    {
+        _d_arraysetlengthiT(typeid(T[]), newLength, &a);
+    }
+}
+
+unittest
+{
+    struct S
+    {
+        int i;
+    }
+
+    class C
+    {
+        int i;
+    }
+
+    interface I { }
+
+    void test(T)()
+    {
+        T[] a;
+        __setArrayLength(a, 10);  // same as a.length = 10;
+        assert(a.length == 10);
+
+        // Ensure items are initialized as expected
+        foreach(i; a)
+        {
+            static if (is(T == float) || is(T == double) || is(T == real))
+            {
+                import core.stdc.math : isnan;
+                assert(isnan(i));
+            }
+            else static if (is(T == class) || is(T == interface))
+            {
+                assert(i is null);
+            }
+            else
+            {
+                assert(i == T.init);
+            }
+        }
+    }
+
+    test!int();
+    test!float();
+    test!S();
+    test!C();
+    test!I();
+    test!(int[])();
+    test!(float[])();
+    test!string();
+}

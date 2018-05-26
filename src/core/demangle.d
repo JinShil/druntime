@@ -12,6 +12,8 @@
 
 module core.demangle;
 
+import object;
+
 version (OSX)
     version = Darwin;
 else version (iOS)
